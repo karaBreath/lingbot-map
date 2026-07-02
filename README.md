@@ -60,6 +60,7 @@ LingBot-Map has focused on:
 
 ## 📰 News
 
+- **2026-06-28** — Fixed an SDPA KV cache bug where `--keyframe_interval > 1` silently cached non-keyframes, **The SDPA backend now performs better on long sequences**. We still recommend the FlashInfer backend for the best performance.
 - **2026-05-25** — 📊 **Evaluation benchmark released**. We released the evaluation scripts for KITTI and Oxford Spires — see [benchmark/](benchmark/) for the pipeline, and run [`preprocess/oxford.py`](preprocess/oxford.py) to prepare Oxford Spires data before evaluation.
 - **2026-04-29** — 📹 **Long-video demo released**. We released a very-long-video example (~25 000 frames, 13-minute indoor walkthrough) rendered with the offline pipeline — see [Worked Example](#worked-example--long-indoor-walkthrough-25-000-frames-13-minutes) for the command, flag rationale, and rendered output.
 - **2026-04-27** — 🚀 **LingBot-Map accelerated**. Pull the latest `main` and run `python demo.py --compile ...` or `python gct_profile.py --backend flashinfer --dtype bf16 --compile` to verify on your hardware.
