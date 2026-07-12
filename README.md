@@ -393,7 +393,7 @@ Flag-by-flag rationale:
 | Flag | Why it's there |
 |---|---|
 | `--mode windowed --window_size 128` | Sliding-window inference is required once the sequence exceeds the ~320-frame RoPE training range; each window resets the KV cache. **`window_size` counts KV-cache slots, not actual frames** — the first `num_scale_frames` (=8) slots hold the scale frames and the remaining `128 − 8 = 120` slots hold keyframes. With `keyframe_interval = 13`, one window therefore covers `8 + 120 × 13 = 1568` actual frames. |
-| `--keyframe_interval 13` | Cache only every 13th frame as a keyframe. Non-keyframes still emit per-frame predictions but don't grow the KV cache|
+| `--keyframe_interval 10` | Cache only every 10th frame as a keyframe. Non-keyframes still emit per-frame predictions but don't grow the KV cache|
 | `--overlap_keyframes 8` | Adjacent windows share 8 keyframes of context, resolved internally to `max(num_scale_frames, 8 × keyframe_interval) = 8 × 13 = 104` actual frames of overlap. Recommended whenever `keyframe_interval > 1`, to keep cross-window pose alignment stable. |
 | `--config demo_render/config/indoor.yaml` | Seed render/scene/camera/overlay defaults from the indoor preset (short depth, tighter follow cam). Any CLI flag the user explicitly passes still overrides the YAML value. |
 | `--sky_mask_dir` / `--sky_mask_visualization_dir` | Persist sky masks and their side-by-side visualizations to disk so subsequent reruns reuse them instead of re-running ONNX segmentation. (The render pipeline only consumes them when sky masking is enabled — by the YAML preset or by `--mask_sky`.) |
@@ -403,7 +403,7 @@ Flag-by-flag rationale:
 | `--save_predictions` | Persist per-frame NPZs alongside the MP4. Useful for inspection or for re-rendering with different camera/overlay settings later. |
 
 
-Replacing keyframe_interval = 10 with image_stride = 10 speeds up rendering. Then, comment out the camera follow section in demo_render/config/indoor.yaml to reproduce the indoor fly-through effect shown in the demo.
+Replacing keyframe_interval = 10 with image_stride = 10 speeds up rendering. Then, comment out the camera follow section in demo_render/config/indoor.yaml , set the birdeye's ranges to [2000, 2500] to reproduce the indoor fly-through effect shown in the demo.
 
 ### Worked Example — outdoor drive scene
 
