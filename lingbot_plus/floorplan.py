@@ -247,6 +247,15 @@ def main():
         fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
+    # intermediate arrays for downstream stages (R3 furniture pins, R4 report):
+    # everything needed to map a world-frame 3D point onto this plan's grid.
+    np.savez_compressed(
+        os.path.join(args.scan_dir, "plan_data.npz"),
+        wall_mask=wall_mask, floor_mask=floor_mask, room_labels=labels,
+        R=R, z0=z0, mn=mn, cell=cell, shape=np.array(shape),
+        room_ids=np.array([r["mask_label"] for r in rooms]),
+    )
+
     with open(os.path.join(args.scan_dir, "plan.json"), "w", encoding="utf-8") as f:
         json.dump({
             "rooms": [{k: v for k, v in r.items() if k != "mask_label"} for r in rooms],
