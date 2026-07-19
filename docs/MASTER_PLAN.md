@@ -190,7 +190,14 @@ d:\cowork\lingbot-map\
 **ความเสี่ยง:** torch-directml ไม่รองรับ API ที่โมเดลใช้ (เช่น op ใหม่) → fallback: รัน `--backend cpu` ให้ผ่านก่อน (correctness) แล้วบันทึกว่า directml ติดอะไร ห้าม silent-fail — ตัดสินใจต่อกับผู้ใช้
 **ห้ามทำ:** แตะ `demo_render/`, `benchmark/` — นอกสโคป
 
-### เฟส 1 — ชั้นใช้ง่าย (ชั้น 1 เดิมที่ผู้ใช้เลือก)
+### เฟส 1 — ชั้นใช้ง่าย — ✅ เสร็จ (2026-07-20)
+
+**ทำแล้ว:** `lingbot_plus/server/` (FastAPI + `index.html` ไทย) — ลากวิดีโอวาง เลือก preset (เร็ว/สมดุล/ละเอียด = fps 3/5/8 + chunk map) + backend, แถบ progress ต่อขั้น + log สด, เสร็จแล้วปุ่ม "เปิดรายงาน" เสิร์ฟจาก `/scans/<ชื่อ>/report.html` · worker เดี่ยว (GPU ทำทีละงานอยู่แล้ว) · แตกเฟรม auto **center-crop 16:9** ตามข้อบังคับ DirectML · ทุกขั้นเรียก module เดิมของ CLI ผ่าน subprocess (ไม่มีโค้ดซ้ำ) · config ผ่าน `.env` (`.env.example` เพิ่มแล้ว)
+**รัน:** `.venv-amd\Scripts\python -X utf8 -m uvicorn lingbot_plus.server.app:app --port 8500`
+**ทดสอบ end-to-end แล้ว:** อัปโหลดวิดีโอทดสอบ 27 วิ → pipeline วิ่งอัตโนมัติครบ 5 ขั้นโดยไม่แตะอะไร → รายงานเปิดจากลิงก์ใน GUI ได้จริง (ยืนยันภาพผ่าน ui-use)
+**หมายเหตุ:** calibrate สเกล (R1) ยังเป็นขั้น manual แยก (ต้อง interactive) — รายงาน auto จะติดป้าย "ยังไม่ calibrate" ตามจริง · preset ตัวเลขยังไม่ได้จูนตาม benchmark จริงจัง (ใช้ค่าตั้งต้นสมเหตุผล)
+
+**สเปกเดิม (อ้างอิง):**
 **เป้า:** คนไม่รู้ CLI ใช้ได้
 
 **งาน:**
