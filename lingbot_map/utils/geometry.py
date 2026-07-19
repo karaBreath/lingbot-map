@@ -191,7 +191,11 @@ def closed_form_inverse_se3_general(se3, R=None, T=None):
     R_transposed = R.transpose(-2, -1)
     top_right = -R_transposed @ T
     # 构造单位阵
-    eye = torch.eye(4, 4, dtype=R.dtype, device=R.device)
+    # Build on CPU then move -- torch_directml's CPU-fallback for the 2-arg
+    # eye(n, m, device=...) overload silently returns an empty [0] tensor
+    # instead of [4, 4] (no error raised). Matches the device-transfer pattern
+    # closed_form_inverse_se3 already uses above for the same reason.
+    eye = torch.eye(4, 4, dtype=R.dtype).to(R.device)
     inverted_matrix = eye.expand(*batch_shape, 4, 4).clone()
     inverted_matrix[..., :3, :3] = R_transposed
     inverted_matrix[..., :3, 3:] = top_right
