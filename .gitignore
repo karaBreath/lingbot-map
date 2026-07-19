@@ -18,3 +18,4 @@ scans/
 .DS_Store
 **/.DS_Store
 testdata/
+uploads/

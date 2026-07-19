@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>สแกนห้อง 3D — LingBot-Map Plus</title>
+<style>
+ body{font-family:'Segoe UI',Tahoma,sans-serif;margin:0;background:#111;color:#eee}
+ header{padding:16px 20px;background:#1b1b1b;border-bottom:2px solid #333}
+ h1{margin:0;font-size:1.25rem} main{max-width:760px;margin:0 auto;padding:16px 20px 60px}
+ .drop{border:2px dashed #446;border-radius:14px;padding:36px 16px;text-align:center;
+       color:#9ab;cursor:pointer;transition:.15s;margin:14px 0}
+ .drop.over{background:#1a2233;border-color:#6af}
+ .row{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0}
+ label{font-size:.9rem;color:#bcd} select,input[type=text]{background:#222;color:#eee;
+       border:1px solid #444;border-radius:8px;padding:8px 10px;font-size:.95rem}
+ button{background:#2563eb;color:#fff;border:0;border-radius:10px;padding:10px 22px;
+        font-size:1rem;cursor:pointer} button:disabled{background:#334;color:#778}
+ .job{background:#1b1b1b;border:1px solid #333;border-radius:12px;padding:12px 14px;margin:10px 0}
+ .bar{height:10px;background:#26304a;border-radius:6px;overflow:hidden;margin:8px 0}
+ .bar>i{display:block;height:100%;background:linear-gradient(90deg,#3b82f6,#22d3ee);
+        border-radius:6px;transition:width .6s}
+ .mut{color:#8aa;font-size:.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .ok{color:#4ade80} .err{color:#f87171}
+ a.report{display:inline-block;background:#166534;color:#d1fae5;text-decoration:none;
+          padding:6px 14px;border-radius:8px;margin-top:6px}
+</style></head><body>
+<header><h1>📷 สแกนห้อง 3D — อัปโหลดวิดีโอเดินถ่ายห้อง</h1></header>
+<main>
+  <div class="drop" id="drop">ลากวิดีโอมาวางที่นี่ หรือคลิกเลือกไฟล์<br>
+    <span class="mut">ถ่ายแนวนอน เดินช้าๆ กวาดให้ครบทุกผนัง 1-3 นาที</span>
+    <input type="file" id="file" accept="video/*" hidden></div>
+  <div class="row">
+    <div><label>ชื่องาน (อังกฤษ/ตัวเลข)</label><br><input type="text" id="name" placeholder="เว้นว่าง = ตั้งอัตโนมัติ"></div>
+    <div><label>ความละเอียด</label><br>
+      <select id="preset">
+        <option value="fast">เร็ว (~ไม่กี่นาที)</option>
+        <option value="balanced" selected>สมดุล</option>
+        <option value="quality">ละเอียด (นานสุด)</option>
+      </select></div>
+    <div><label>ตัวประมวลผล</label><br>
+      <select id="backend"><option value="">อัตโนมัติ</option>
+        <option value="directml">การ์ดจอ AMD (DirectML)</option>
+        <option value="cpu">CPU (ช้า)</option></select></div>
+  </div>
+  <button id="go" disabled>เริ่มสแกน</button> <span id="upmsg" class="mut"></span>
+  <h2 style="font-size:1.05rem;color:#8ecbff">งานทั้งหมด</h2>
+  <div id="jobs"></div>
+</main>
+<script>
+const drop=document.getElementById('drop'), fileEl=document.getElementById('file');
+const go=document.getElementById('go'), upmsg=document.getElementById('upmsg');
+let picked=null;
+drop.onclick=()=>fileEl.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over');};
+drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');
+  if(e.dataTransfer.files.length){fileEl.files=e.dataTransfer.files;onPick();}};
+fileEl.onchange=onPick;
+function onPick(){picked=fileEl.files[0]||null; go.disabled=!picked;
+  drop.firstChild.textContent=picked?('ไฟล์: '+picked.name+' ('+(picked.size/1048576).toFixed(1)+' MB)')
+                                    :'ลากวิดีโอมาวางที่นี่ หรือคลิกเลือกไฟล์';}
+go.onclick=async()=>{
+  go.disabled=true; upmsg.textContent='กำลังอัปโหลด...';
+  const fd=new FormData();
+  fd.append('video',picked);
+  fd.append('name',document.getElementById('name').value);
+  fd.append('preset',document.getElementById('preset').value);
+  fd.append('backend',document.getElementById('backend').value);
+  try{
+    const r=await fetch('/api/scan',{method:'POST',body:fd});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.detail||r.status);
+    upmsg.textContent='เข้าคิวแล้ว: '+j.name; picked=null; fileEl.value=''; onPick();
+  }catch(e){upmsg.textContent='ผิดพลาด: '+e.message; go.disabled=false;}
+  poll();
+};
+async function poll(){
+  try{
+    const jobs=await (await fetch('/api/jobs')).json();
+    document.getElementById('jobs').innerHTML = jobs.length? jobs.map(j=>{
+      const pct = j.status==='done'?100 : j.stage_index>=0? Math.round(100*(j.stage_index+0.5)/j.stages_total):5;
+      const state = j.status==='done'?'<span class="ok">✔ เสร็จ</span>'
+                  : j.status==='failed'?'<span class="err">✖ ล้มเหลว: '+(j.error||'')+'</span>'
+                  : '⏳ '+j.status_th;
+      return `<div class="job"><b>${j.name}</b> · ${j.preset} · ${j.backend||'auto'}<br>${state}
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        ${j.status==='done'&&j.report?`<a class="report" href="${j.report}" target="_blank">เปิดรายงาน</a>`:''}
+        <div class="mut">${j.last_log||''}</div></div>`;
+    }).join('') : '<p class="mut">ยังไม่มีงาน</p>';
+  }catch(e){}
+}
+setInterval(poll, 2500); poll();
+</script></body></html>

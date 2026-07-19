@@ -21,3 +21,10 @@ trimesh
 matplotlib
 onnxruntime
 requests
+
+# R2-R4 + Phase 1 GUI
+open3d
+ultralytics
+fastapi
+uvicorn
+python-multipart
