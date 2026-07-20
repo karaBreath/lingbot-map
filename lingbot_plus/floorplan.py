@@ -47,47 +47,71 @@ def load_scan(scan_dir, conf_threshold):
     return pts, scale, cam_centers
 
 
-def find_floor(pcd, cam_centers, o3d, unit=1.0, scaled=False):
+def find_floor(pcd, cam_centers, o3d, unit=1.0, scaled=False, extent=None):
     """RANSAC out up to 6 planes; floor = the plane most consistent with
-    'cameras are above it, looking mostly across it'.
+    'cameras are above it, moving flat across it'.
 
-    Desk trap: in furniture-heavy rooms the biggest plane is often the DESK
-    surface, not the floor (observed on TUM fr1: picked plane put the camera
-    0.2 m above it). When the scan is metric-calibrated, planes with a
-    plausible handheld camera height (0.8-2.2 m) win over raw inlier count.
+    Two traps this resists, both seen on real scans:
+
+    - **Desk trap** (TUM fr1): the biggest plane is a desk surface, not the
+      floor. When the scan is metric-calibrated, a plausible handheld camera
+      height (0.8-2.2 m) beats raw inlier count.
+    - **Wall / near-camera trap** (real-room-hq, strong scale drift): the
+      densest plane is a wall or clutter the camera skims, so 'largest plane'
+      picks it (camera ~2% of scene extent above the chosen plane). Two
+      scale-invariant signals fix this without metric calibration:
+        1. cameras must sit meaningfully ABOVE the plane (camh/extent), not on
+           it — kills near-camera clutter/ceiling;
+        2. cameras spread little ALONG the floor normal (they walk at roughly
+           constant height) but far across it — a wall has cameras spread wide
+           along its normal, so penalise high spread-along-normal.
+
+    `extent` = scene diagonal (model units); computed from the cloud if omitted.
     """
+    pts_all = np.asarray(pcd.points)
+    if extent is None:
+        extent = float(np.linalg.norm(pts_all.max(0) - pts_all.min(0)))
+    thr = 0.01 if scaled else extent * 0.004          # extent-relative when uncalibrated
+    cam_spread = float(np.linalg.norm(cam_centers.std(0))) if cam_centers is not None else 0.0
+
     rest = pcd
     cands = []
     for _ in range(6):
         if len(rest.points) < 500:
             break
         model, inliers = rest.segment_plane(
-            distance_threshold=0.01, ransac_n=3, num_iterations=1000)
+            distance_threshold=thr, ransac_n=3, num_iterations=1000)
         plane_pts = rest.select_by_index(inliers)
         n = np.asarray(model[:3])
         d0 = model[3]
+        cam_h = 0.0
+        spread_n = 0.0
         if cam_centers is not None:
             sd = cam_centers @ n + d0
             if np.median(sd) < 0:
                 n, d0, sd = -n, -d0, -sd
             cam_h = float(np.median(sd))
-        else:
-            cam_h = 0.0
+            if cam_spread > 1e-9:
+                spread_n = float((cam_centers @ n).std()) / cam_spread
         cands.append({"n": n, "d": d0, "inliers": len(inliers), "cam_h": cam_h,
-                      "pts": np.asarray(plane_pts.points)})
+                      "camh_ratio": cam_h / extent if extent else 0.0,
+                      "spread_n": spread_n, "pts": np.asarray(plane_pts.points)})
         rest = rest.select_by_index(inliers, invert=True)
     if not cands:
         raise SystemExit("no plane found — cloud too sparse?")
 
     def score(c):
         s = float(c["inliers"])
-        if c["cam_h"] <= 0.05:          # cameras not above it -> ceiling/wall
-            s *= 0.1
+        if cam_centers is not None:
+            if c["camh_ratio"] < 0.02:      # cameras sit ON it -> clutter/ceiling/wall-base
+                s *= 0.15
+            # walls: cameras roam far along the plane normal; floor: they stay flat
+            s *= max(0.15, 1.0 - c["spread_n"])
         if scaled:
             h_m = c["cam_h"] * unit
-            if 0.8 <= h_m <= 2.2:        # plausible handheld height above FLOOR
+            if 0.8 <= h_m <= 2.2:           # plausible handheld height above FLOOR
                 s *= 3.0
-            elif h_m < 0.5:              # desk/table surface
+            elif h_m < 0.5:                 # desk/table surface
                 s *= 0.2
         return s
 
@@ -138,7 +162,8 @@ def main():
     pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
     print(f"[floorplan] {len(pcd.points):,} points after downsample+outlier removal", flush=True)
 
-    floor = find_floor(pcd, cam_centers, o3d, unit=unit, scaled=bool(scale))
+    extent = float(np.linalg.norm(np.asarray(pcd.points).max(0) - np.asarray(pcd.points).min(0)))
+    floor = find_floor(pcd, cam_centers, o3d, unit=unit, scaled=bool(scale), extent=extent)
     print(f"[floorplan] floor: {floor['inliers']:,} inliers, camera height ≈ "
           f"{floor['cam_h'] * unit:.2f} {unit_name}", flush=True)
     floor_warning = None
