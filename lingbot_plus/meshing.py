@@ -93,7 +93,16 @@ def texture_mesh(verts, faces, images, intrinsics, extrinsics,
     """
     import xatlas
 
-    vmap, idx, uvs = xatlas.parametrize(verts.astype(np.float32), faces.astype(np.uint32))
+    # Atlas API (not xatlas.parametrize) so we can set pack padding — a gutter
+    # between charts that gives the edge-padding pass room to bleed into, instead
+    # of charts touching and sampling each other at boundaries.
+    atlas = xatlas.Atlas()
+    atlas.add_mesh(verts.astype(np.float32), faces.astype(np.uint32))
+    pack = xatlas.PackOptions()
+    pack.padding = 4
+    pack.bilinear = True
+    atlas.generate(xatlas.ChartOptions(), pack)
+    vmap, idx, uvs = atlas[0]
     NV = verts[vmap].astype(np.float32)
 
     import open3d as o3d
@@ -106,15 +115,37 @@ def texture_mesh(verts, faces, images, intrinsics, extrinsics,
     imgs = [o3d.t.geometry.Image(o3d.core.Tensor(np.ascontiguousarray(images[i]))) for i in sel]
     Ks = [o3d.core.Tensor(intrinsics[i].astype(np.float64)) for i in sel]
     Es = [o3d.core.Tensor(np.vstack([extrinsics[i], [0, 0, 0, 1]]).astype(np.float64)) for i in sel]
+    import cv2
     alb = tm.project_images_to_albedo(imgs, Ks, Es, tex_size=tex_size, update_material=True)
     albedo = alb.as_tensor().numpy().astype(np.uint8)
-
-    # fill small uncovered texels (occlusion/blend gaps show as black speckle)
-    import cv2
-    gap = (albedo.sum(2) == 0).astype(np.uint8)
-    if 0 < gap.mean() < 0.9:
-        albedo = cv2.inpaint(np.ascontiguousarray(albedo), gap, 3, cv2.INPAINT_TELEA)
+    albedo = _pad_chart_edges(albedo)
+    # kill isolated salt-and-pepper texels (bad single projections) — gutters are
+    # already padded to a uniform colour so the median doesn't pull black inward
+    albedo = cv2.medianBlur(albedo, 3)
     return NV, idx.astype(np.uint32), uvs.astype(np.float32), albedo
+
+
+def _pad_chart_edges(albedo, iters=6):
+    """Bleed each UV chart's border colour outward into the surrounding gutter.
+
+    Uncovered texels bake as pure black; at render time bilinear filtering near a
+    chart edge samples that black gutter and produces dark speckle along seams.
+    Extending the covered colour a few texels into the gutter (island padding —
+    the standard texture-bake fix) means edge sampling always lands on real
+    colour. Genuinely dark surfaces (sum>0) are covered, so they are preserved.
+    """
+    import cv2
+    out = np.ascontiguousarray(albedo)
+    mask = (out.sum(2) > 0).astype(np.uint8)
+    k = np.ones((3, 3), np.uint8)
+    for _ in range(iters):
+        grow = (cv2.dilate(mask, k) > 0) & (mask == 0)
+        if not grow.any():
+            break
+        dil = cv2.dilate(out, k)
+        out[grow] = dil[grow]
+        mask[grow] = 1
+    return out
 
 
 def decimate(verts, faces, vcols, target_tris):
