@@ -118,6 +118,68 @@ def find_floor(pcd, cam_centers, o3d, unit=1.0, scaled=False, extent=None):
     return max(cands, key=score)
 
 
+def segment_rooms(floor_mask, wall_mask, per_cell, scaled, min_room_m2, min_cells,
+                  bridge_m=0.35, wall_gap_m=0.25, min_wall_m=0.5):
+    """Rooms from occupancy masks, robust to fragmented walls/floor.
+
+    `per_cell` = metres per grid cell when scaled, else model-units per cell
+    (distances below are taken as ratios of it, so the morphology scales with
+    the grid in both cases). Three robustness steps:
+      1. close floor gaps (bridge_m) — a patchy single room reconnects instead
+         of shattering into sub-min fragments;
+      2. keep only genuine walls — bridge small wall gaps (wall_gap_m) then drop
+         components shorter than min_wall_m, so stray furniture specks and dashed
+         reconstruction noise stop punching false dividers;
+      3. free space = bridged floor minus genuine walls -> connected components.
+
+    Returns (labels, rooms) with rooms sorted large->small and ids assigned.
+    """
+    from scipy import ndimage
+
+    def cells(d):
+        return max(1, int(round(d / per_cell)))
+
+    st = np.ones((3, 3))
+    floor_c = ndimage.binary_closing(floor_mask, structure=st, iterations=cells(bridge_m))
+    wall_c = ndimage.binary_closing(wall_mask, structure=st, iterations=cells(wall_gap_m))
+
+    # keep wall components whose longest extent reaches min_wall_m (real walls),
+    # drop short/isolated specks (furniture edges, drift noise)
+    wl, wn = ndimage.label(wall_c)
+    strong = np.zeros_like(wall_c)
+    minlen = cells(min_wall_m)
+    for i in range(1, wn + 1):
+        comp = wl == i
+        ys, xs = np.nonzero(comp)
+        span = max(xs.max() - xs.min(), ys.max() - ys.min()) + 1
+        if span >= minlen:
+            strong |= comp
+
+    free = floor_c & ~strong
+    free = ndimage.binary_opening(free, structure=st)
+
+    labels, n_lab = ndimage.label(free)
+    cell_area = per_cell ** 2
+    rooms = []
+    for i in range(1, n_lab + 1):
+        m = labels == i
+        area = float(m.sum() * cell_area)
+        if scaled and area < min_room_m2:
+            continue
+        if not scaled and m.sum() < min_cells:
+            continue
+        ys, xs = np.nonzero(m)
+        w = float((xs.max() - xs.min() + 1) * per_cell)
+        h = float((ys.max() - ys.min() + 1) * per_cell)
+        rooms.append({"area": round(area, 2), "width": round(w, 2), "length": round(h, 2),
+                      "bbox_cells": [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())],
+                      "mask_label": i})
+    rooms.sort(key=lambda r: -r["area"])
+    for j, r in enumerate(rooms):
+        r["id"] = j + 1
+    return labels, rooms
+
+
 def rotation_to_z(n):
     """Rotation matrix sending unit vector n -> +Z."""
     n = n / np.linalg.norm(n)
@@ -209,31 +271,11 @@ def main():
     wall_mask = ndimage.binary_closing(wall_mask, structure=np.ones((3, 3)), iterations=2)
     floor_mask = ndimage.binary_closing(g_floor >= 2, structure=np.ones((3, 3)), iterations=2)
 
-    # free space = scanned floor not blocked by walls
-    free = floor_mask & ~wall_mask
-    free = ndimage.binary_opening(free, structure=np.ones((3, 3)))
-
-    # rooms = connected free-space components of meaningful size
-    labels, n_lab = ndimage.label(free)
-    cell_area = (args.cell_m ** 2) if scale else (cell ** 2)
-    rooms = []
-    for i in range(1, n_lab + 1):
-        m = labels == i
-        area = float(m.sum() * cell_area)
-        if scale and area < args.min_room_m2:
-            continue
-        if not scale and m.sum() < 400:
-            continue
-        ys, xs = np.nonzero(m)
-        w = float((xs.max() - xs.min() + 1) * (args.cell_m if scale else cell))
-        h = float((ys.max() - ys.min() + 1) * (args.cell_m if scale else cell))
-        rooms.append({"id": len(rooms) + 1, "area": round(area, 2),
-                      "width": round(w, 2), "length": round(h, 2),
-                      "bbox_cells": [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())],
-                      "mask_label": i})
-    rooms.sort(key=lambda r: -r["area"])
-    for j, r in enumerate(rooms):
-        r["id"] = j + 1
+    # rooms — robust to fragmented walls/floor (bridge gaps, drop wall specks)
+    per_cell = args.cell_m if scale else cell
+    labels, rooms = segment_rooms(
+        floor_mask, wall_mask, per_cell=per_cell, scaled=bool(scale),
+        min_room_m2=args.min_room_m2, min_cells=400)
     print(f"[floorplan] rooms detected: {len(rooms)}", flush=True)
     for r in rooms:
         print(f"  ห้อง {r['id']}: {r['width']:.2f} x {r['length']:.2f} {unit_name}"
