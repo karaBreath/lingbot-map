@@ -23,6 +23,9 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from lingbot_plus.export import export_scan, reveal  # noqa: E402
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -61,6 +64,29 @@ app.mount("/scans", StaticFiles(directory=SCANS_DIR, html=True), name="scans")
 
 _jobs: dict = {}
 _q: "queue.Queue[str]" = queue.Queue()
+
+
+def _load_existing_jobs():
+    """Repopulate finished scans from their job.json so past work (and its
+    'บันทึกลงเครื่อง' button) survives a server restart."""
+    for name in sorted(os.listdir(SCANS_DIR)) if os.path.isdir(SCANS_DIR) else []:
+        jp = os.path.join(SCANS_DIR, name, "job.json")
+        if name in _jobs or not os.path.isfile(jp):
+            continue
+        try:
+            with open(jp, encoding="utf-8") as f:
+                j = json.load(f)
+        except (OSError, ValueError):
+            continue
+        _jobs[name] = {
+            "name": j.get("name", name), "status": j.get("status", "done"),
+            "preset": j.get("preset", "-"), "backend": j.get("backend", ""),
+            "report": j.get("report"), "error": j.get("error"),
+            "created_at": j.get("created_at", 0), "log": j.get("log_tail", []),
+        }
+
+
+_load_existing_jobs()
 
 
 def _extract_frames(video_path, out_dir, fps):
@@ -202,3 +228,15 @@ def jobs():
                     "report": j["report"], "error": j["error"],
                     "last_log": j["log"][-1] if j["log"] else ""})
     return JSONResponse(out)
+
+
+@app.post("/api/export/{name}")
+def export(name: str):
+    """Save this scan's deliverables to a permanent local folder and open it."""
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "", name)
+    scan_dir = os.path.join(SCANS_DIR, safe)
+    if not os.path.isdir(scan_dir):
+        raise HTTPException(404, f"ไม่พบงาน '{safe}'")
+    out, copied = export_scan(scan_dir, name=safe)
+    reveal(out)
+    return {"path": out, "files": copied}

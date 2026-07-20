@@ -22,6 +22,9 @@
  .ok{color:#4ade80} .err{color:#f87171}
  a.report{display:inline-block;background:#166534;color:#d1fae5;text-decoration:none;
           padding:6px 14px;border-radius:8px;margin-top:6px}
+ button.save{background:#3730a3;color:#e0e7ff;border:0;border-radius:8px;padding:6px 14px;
+          margin:6px 0 0 6px;font-size:.9rem;cursor:pointer}
+ button.save:disabled{background:#334;color:#9ab}
 </style></head><body>
 <header><h1>📷 สแกนห้อง 3D — อัปโหลดวิดีโอเดินถ่ายห้อง</h1></header>
 <main>
@@ -90,10 +93,22 @@ async function poll(){
                   : '⏳ '+j.status_th;
       return `<div class="job"><b>${j.name}</b> · ${j.preset} · ${j.backend||'auto'}<br>${state}
         <div class="bar"><i style="width:${pct}%"></i></div>
-        ${j.status==='done'&&j.report?`<a class="report" href="${j.report}" target="_blank">เปิดรายงาน</a>`:''}
+        ${j.status==='done'&&j.report?`<a class="report" href="${j.report}" target="_blank">เปิดรายงาน</a>
+          <button class="save" onclick="saveLocal('${j.name}',this)">💾 บันทึกลงเครื่อง</button>`:''}
         <div class="mut">${j.last_log||''}</div></div>`;
     }).join('') : '<p class="mut">ยังไม่มีงาน</p>';
   }catch(e){}
+}
+async function saveLocal(name, btn){
+  btn.disabled=true; const old=btn.textContent; btn.textContent='กำลังบันทึก...';
+  try{
+    const r=await fetch('/api/export/'+encodeURIComponent(name),{method:'POST'});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.detail||r.status);
+    btn.textContent='✔ บันทึกแล้ว'; btn.title=j.path;
+    const m=document.createElement('div'); m.className='mut'; m.textContent='บันทึกที่: '+j.path;
+    btn.parentNode.appendChild(m);
+  }catch(e){btn.textContent=old; btn.disabled=false; alert('บันทึกไม่สำเร็จ: '+e.message);}
 }
 setInterval(poll, 2500); poll();
 </script></body></html>
