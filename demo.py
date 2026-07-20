@@ -48,6 +48,8 @@ from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri
 from lingbot_map.utils.geometry import closed_form_inverse_se3_general
 from lingbot_map.utils.load_fn import load_and_preprocess_images
 
+from lingbot_plus.device import resolve_backend
+
 
 # =============================================================================
 # Image loading
@@ -151,7 +153,13 @@ def load_model(args, device):
 
     if args.model_path:
         print(f"Loading checkpoint: {args.model_path}")
-        ckpt = torch.load(args.model_path, map_location=device, weights_only=False)
+        # map_location="cpu" always, then model.to(device) below moves it: some
+        # backends (e.g. torch_directml's device object) aren't valid
+        # map_location targets for torch.load's generic restore-location
+        # dispatch ("TypeError: '>=' not supported between instances of
+        # 'torch.device' and 'int'"). CPU staging is also just the standard
+        # safe-load pattern regardless of backend.
+        ckpt = torch.load(args.model_path, map_location="cpu", weights_only=False)
         state_dict = ckpt.get("model", ckpt)
         missing, unexpected = model.load_state_dict(state_dict, strict=False)
         if missing:
@@ -383,7 +391,11 @@ def main():
                         help="Use SDPA backend (no flashinfer needed). Default: FlashInfer")
     parser.add_argument("--compile", action="store_true", default=False,
                         help="torch.compile hot modules (reduce-overhead) with a CUDA-graph warmup. "
-                            "Streaming mode only; ~5 FPS faster at 518x378. Adds ~30-60 s warmup time.")
+                            "Streaming mode only; ~5 FPS faster at 518x378. Adds ~30-60 s warmup time. "
+                            "CUDA backend only.")
+    parser.add_argument("--backend", type=str, default="auto",
+                        choices=["auto", "cuda", "rocm", "directml", "cpu"],
+                        help="Compute backend. auto picks the best available device.")
     parser.add_argument(
         "--offload_to_cpu",
         action=argparse.BooleanOptionalAction,
@@ -418,7 +430,15 @@ def main():
     assert args.image_folder or args.video_path, \
         "Provide --image_folder or --video_path"
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    backend = resolve_backend(args.backend)
+    print(f"Compute backend: {backend.describe()}")
+    if backend.force_sdpa and not args.use_sdpa:
+        print(f"Backend {backend.name!r} has no FlashInfer support -> forcing --use_sdpa.")
+        args.use_sdpa = True
+    if args.compile and not backend.allow_compile:
+        print(f"Backend {backend.name!r} does not support --compile (CUDA-graph capture) -> ignoring --compile.")
+        args.compile = False
+    device = backend.device
 
     # ── Load images & model ──────────────────────────────────────────────────
     t0 = time.time()
@@ -445,10 +465,7 @@ def main():
     print(f"Total load time: {time.time() - t0:.1f}s")
 
     # Pick inference dtype; autocast still runs for the ops that need fp32 (e.g. LayerNorm).
-    if torch.cuda.is_available():
-        dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-    else:
-        dtype = torch.float32
+    dtype = backend.dtype
 
     # Cast the aggregator (DINOv2-style trunk) to the inference dtype to remove the
     # redundant fp32 master weight copy + autocast bf16 weight cache (~2-3 GB saved,
@@ -459,7 +476,15 @@ def main():
         print(f"Casting aggregator to {dtype} (heads kept in fp32)")
         model.aggregator = model.aggregator.to(dtype=dtype)
 
-    images = images.to(device)
+    if backend.name in ("directml", "cpu"):
+        # Keep the whole clip on CPU: inference_streaming/windowed slice and
+        # move each frame to the device themselves (peak GPU = O(1) frames,
+        # not O(S) — see gct_stream.py "Images may live on CPU"). A 454-frame
+        # clip is ~830 MB, which would otherwise sit on the GPU for the whole
+        # run and starve DirectML's allocator.
+        print(f"Backend {backend.name!r}: keeping input frames on CPU (streamed to device per frame).")
+    else:
+        images = images.to(device)
     num_frames = images.shape[0]
     print(f"Input: {num_frames} frames, shape {tuple(images.shape)}")
     print(f"Mode: {args.mode}")
@@ -473,11 +498,22 @@ def main():
 
     if args.keyframe_interval is None:
         if args.mode == "streaming" and num_frames > 320:
-            args.keyframe_interval = (num_frames + 319) // 320
-            print(
-                f"Auto-selected --keyframe_interval={args.keyframe_interval} "
-                f"(num_frames={num_frames} > 320)."
-            )
+            if backend.name in ("directml", "cpu"):
+                # keyframe_interval > 1 routes non-keyframes through the
+                # defer+append+rollback path, whose allocation churn OOMs
+                # DirectML within ~10 frames (measured). The sliding-window KV
+                # cache already bounds memory, so keep every frame a keyframe.
+                args.keyframe_interval = 1
+                print(
+                    f"num_frames={num_frames} > 320 but backend {backend.name!r} "
+                    "cannot use keyframe_interval > 1 (allocation churn) -> keeping 1."
+                )
+            else:
+                args.keyframe_interval = (num_frames + 319) // 320
+                print(
+                    f"Auto-selected --keyframe_interval={args.keyframe_interval} "
+                    f"(num_frames={num_frames} > 320)."
+                )
         else:
             args.keyframe_interval = 1
 
@@ -542,7 +578,7 @@ def main():
 
     output_device = torch.device("cpu") if args.offload_to_cpu else None
 
-    with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
+    with torch.no_grad(), backend.autocast():
         if args.mode == "streaming":
             predictions = model.inference_streaming(
                 images,

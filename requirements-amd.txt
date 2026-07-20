@@ -1,0 +1,30 @@
+# AMD/DirectML backend for LingBot-Map (Windows, no NVIDIA).
+# torch-directml pins torch to 2.4.1 (its latest build as of writing) -- do not
+# bump torch here without confirming a newer torch-directml release supports it.
+torch==2.4.1
+torchvision==0.19.1
+torch-directml
+
+# Core (from upstream pyproject.toml, mirrored here since we install without
+# the CUDA-only extras kaolin/flashinfer)
+Pillow
+huggingface_hub
+einops
+safetensors
+opencv-python
+tqdm
+scipy
+
+# vis extras (upstream [vis] group)
+viser>=0.2.23
+trimesh
+matplotlib
+onnxruntime
+requests
+
+# R2-R4 + Phase 1 GUI
+open3d
+ultralytics
+fastapi
+uvicorn
+python-multipart

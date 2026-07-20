@@ -42,16 +42,35 @@ def slice_expand_and_flatten(token, B, S, first_num_frame=1):
     """
     # token shape: [1, 2, N, C]
     # Expand to [B, S, N, C]
+    # .contiguous() forces the expand()'d (stride-0) view into real memory
+    # before cat -- some backends (e.g. DirectML) error on torch.cat over
+    # non-contiguous expanded tensors ("The parameter is incorrect."). Trivial
+    # cost here (these are small per-frame token tensors), no behavior change
+    # on CUDA/CPU.
+    #
+    # When S == first_num_frame (the very first scale-frame batch of every
+    # streaming run: demo.py's Phase 1 call always sets num_frame_for_scale ==
+    # num_frame_per_block), token_rest is a zero-length tensor. DirectML's cat
+    # kernel errors on a zero-size operand ("The parameter is incorrect."), so
+    # skip the cat entirely in that case -- same result on every backend.
     if first_num_frame > 1:
         # Use first token for first first_num_frame frames, second for rest
-        token_first = token[:, :1].expand(B, first_num_frame, -1, -1)  # [B, first_num_frame, N, C]
-        token_rest = token[:, 1:].expand(B, S - first_num_frame, -1, -1)  # [B, S-first_num_frame, N, C]
-        token_expanded = torch.cat([token_first, token_rest], dim=1)  # [B, S, N, C]
+        n_rest = S - first_num_frame
+        token_first = token[:, :1].expand(B, first_num_frame, -1, -1).contiguous()  # [B, first_num_frame, N, C]
+        if n_rest > 0:
+            token_rest = token[:, 1:].expand(B, n_rest, -1, -1).contiguous()  # [B, n_rest, N, C]
+            token_expanded = torch.cat([token_first, token_rest], dim=1)  # [B, S, N, C]
+        else:
+            token_expanded = token_first
     else:
         # Use first token for first frame, second for rest
-        token_first = token[:, :1].expand(B, 1, -1, -1)  # [B, 1, N, C]
-        token_rest = token[:, 1:].expand(B, S - 1, -1, -1)  # [B, S-1, N, C]
-        token_expanded = torch.cat([token_first, token_rest], dim=1)  # [B, S, N, C]
+        n_rest = S - 1
+        token_first = token[:, :1].expand(B, 1, -1, -1).contiguous()  # [B, 1, N, C]
+        if n_rest > 0:
+            token_rest = token[:, 1:].expand(B, n_rest, -1, -1).contiguous()  # [B, n_rest, N, C]
+            token_expanded = torch.cat([token_first, token_rest], dim=1)  # [B, S, N, C]
+        else:
+            token_expanded = token_first
 
     # Flatten to [B*S, N, C]
     return token_expanded.reshape(B * S, -1, token.shape[-1])

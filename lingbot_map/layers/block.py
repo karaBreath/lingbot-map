@@ -18,7 +18,6 @@ from torch import nn, Tensor
 
 from .attention import Attention, CausalAttention, FlashInferAttention, SDPAAttention
 from functools import lru_cache, partial
-from torch.nn.attention.flex_attention import BlockMask, create_mask
 from .drop_path import DropPath
 from .layer_scale import LayerScale
 from .mlp import Mlp
@@ -379,12 +378,17 @@ class CameraBlock(nn.Module):
     def _prepare_blockwise_causal_attn_mask(self,
         device: torch.device | str, num_frames: int = 21,
         frame_seqlen: int = 1560, num_frame_per_block=1
-    ) -> BlockMask:
+    ) -> "BlockMask":
         """
         we will divide the token sequence into the following format
         [1 latent frame] [1 latent frame] ... [1 latent frame]
         We use flexattention to construct the attention mask
         """
+        # Imported lazily: flex_attention needs torch>=2.5, and this path is
+        # never reached during streaming inference (see the kv_cache is None
+        # guard in forward() below) -- only non-streaming/training callers hit
+        # this method, so torch-directml (pinned to torch==2.4.1) never needs it.
+        from torch.nn.attention.flex_attention import BlockMask, create_mask
         total_length = num_frames * frame_seqlen
 
         # we do right padding to get to a multiple of 128

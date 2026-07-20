@@ -276,6 +276,22 @@ def get_1d_rotary_pos_embed(
         return freqs_cis
 
 
+class _RealImagView:
+    """Exposes .real/.imag like a complex tensor, backed by two plain real tensors.
+
+    DirectML (device.type == "privateuseone") hard-aborts the process on any op
+    touching a complex-dtype tensor ("Invalid or unsupported data type
+    ComplexDouble" is a glog FATAL, not a catchable Python exception). This
+    wrapper lets WanRotaryPosEmbed do all its complex-valued index/expand/cat
+    math on CPU (where complex is safe), then move only the two derived real
+    tensors to the target device -- apply_rotary_emb only ever reads
+    freqs.real / freqs.imag, so it needs no changes.
+    """
+    def __init__(self, real, imag):
+        self.real = real
+        self.imag = imag
+
+
 class WanRotaryPosEmbed(nn.Module):
     """
     3D旋转位置编码（3D RoPE）模块
@@ -362,7 +378,13 @@ class WanRotaryPosEmbed(nn.Module):
         """
 
         # 步骤1：将预计算的频率移到目标设备，并分割成三个维度
-        self.freqs = self.freqs.to(device)
+        # complex_ok: cpu/cuda natively support complex tensors; other backends
+        # (DirectML="privateuseone", possibly mps/xpu) do not and hard-abort the
+        # process on contact -- keep freqs on CPU for those and only move the
+        # final real (cos/sin) components to `device` right before returning.
+        complex_ok = device.type in ("cpu", "cuda")
+        if complex_ok:
+            self.freqs = self.freqs.to(device)
         # 获取实际的维度分配
         if hasattr(self, 'fhw_dim') and self.fhw_dim is not None:
             t_dim, h_dim, w_dim = self.fhw_dim
@@ -422,7 +444,9 @@ class WanRotaryPosEmbed(nn.Module):
             # Flatten to get final shape: (ppf * (patch_start_idx + pph * ppw), dim)
             freqs = freqs.reshape(ppf * (patch_start_idx + pph * ppw), -1)
             freqs = freqs.unsqueeze(0).unsqueeze(0)  # (1, 1, ppf * (patch_start_idx + pph * ppw), dim) 添加batch和head维度
-            return freqs
+            if complex_ok:
+                return freqs
+            return _RealImagView(freqs.real.to(device), freqs.imag.to(device))
         
         # 如果没有特殊token（patch_start_idx == 0），只处理图像patches
         # 所有patches位于 (f, 0:pph, 0:ppw)
@@ -430,7 +454,9 @@ class WanRotaryPosEmbed(nn.Module):
         freqs_h = freqs[1][:pph].reshape(1, pph, 1, -1).expand(ppf, pph, ppw, -1)  # (ppf, pph, ppw, dim_h) 高度从0开始
         freqs_w = freqs[2][:ppw].reshape(1, 1, ppw, -1).expand(ppf, pph, ppw, -1)  # (ppf, pph, ppw, dim_w) 宽度从0开始
         freqs = torch.cat([freqs_f, freqs_h, freqs_w], dim=-1).reshape(1, 1, ppf * pph * ppw, -1)  # (1, 1, ppf * pph * ppw, dim)
-        return freqs
+        if complex_ok:
+            return freqs
+        return _RealImagView(freqs.real.to(device), freqs.imag.to(device))
     
 def apply_rotary_emb(x, freqs):
     """Apply 3D rotary position embedding using real arithmetic (torch.compile-safe).
