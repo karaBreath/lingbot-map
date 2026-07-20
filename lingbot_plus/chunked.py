@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import glob
 import os
 import subprocess
 import sys
@@ -21,6 +20,8 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from lingbot_plus.frames import list_images  # noqa: E402
 
 
 def umeyama(src: np.ndarray, dst: np.ndarray):
@@ -79,10 +80,7 @@ def main():
     ap.add_argument("--conf_threshold", type=float, default=1.5)
     args = ap.parse_args()
 
-    paths = []
-    for ext in args.image_ext.split(","):
-        paths.extend(glob.glob(os.path.join(args.image_folder, f"*{ext}")))
-    n = len(sorted(paths)[:: args.stride])
+    n = len(list_images(args.image_folder, args.image_ext)[:: args.stride])
     if n == 0:
         raise SystemExit("no frames found")
 

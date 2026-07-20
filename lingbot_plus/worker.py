@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import glob
 import os
 import sys
 
@@ -22,6 +21,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lingbot_plus.device import resolve_backend
+from lingbot_plus.frames import list_images
 from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri
 from lingbot_map.utils.geometry import closed_form_inverse_se3_general
 from lingbot_map.utils.load_fn import load_and_preprocess_images
@@ -45,10 +45,7 @@ def main():
     backend = resolve_backend(args.backend)
     print(f"[worker] {backend.describe()}", flush=True)
 
-    paths = []
-    for ext in args.image_ext.split(","):
-        paths.extend(glob.glob(os.path.join(args.image_folder, f"*{ext}")))
-    paths = sorted(paths)[:: args.stride]
+    paths = list_images(args.image_folder, args.image_ext)[:: args.stride]
     chunk_paths = paths[args.start : args.end]
     if not chunk_paths:
         raise SystemExit(f"[worker] empty chunk {args.start}:{args.end} (have {len(paths)} strided frames)")
