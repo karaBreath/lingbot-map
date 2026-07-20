@@ -401,6 +401,12 @@ Replacing keyframe_interval = 10 with image_stride = 10 speeds up rendering. The
 
 
 
+https://github.com/user-attachments/assets/8c4e30a2-5dcd-4184-880f-bd457f4b5416
+
+
+
+
+
 ### Worked Example — outdoor drive scene
 
 **Dataset:** Download the example video from [robbyant/lingbot-map-demo](https://huggingface.co/datasets/robbyant/lingbot-map-demo/tree/main) on Hugging Face.
