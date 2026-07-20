@@ -94,6 +94,24 @@ def main():
         mesh_c_b64 = base64.b64encode(md["colors"].astype(np.uint8).tobytes()).decode()
         print(f"[report] embedding mesh {len(mv):,} verts", flush=True)
 
+    # ── textured mesh (Track M2) — UV atlas from keyframes ────────────────────
+    tex_v_b64 = tex_f_b64 = tex_uv_b64 = tex_img_b64 = ""
+    tex_p = os.path.join(sd, "mesh_tex.npz")
+    albedo_p = os.path.join(sd, "albedo.png")
+    if os.path.exists(tex_p) and os.path.exists(albedo_p):
+        td = np.load(tex_p)
+        tvv = td["vertices"].astype(np.float32)
+        if os.path.exists(os.path.join(sd, "plan_data.npz")):
+            pl = np.load(os.path.join(sd, "plan_data.npz"))
+            tvv = tvv @ pl["R"].T
+            tvv[:, 2] -= float(pl["z0"])
+        tvv = np.stack([tvv[:, 0], tvv[:, 2], -tvv[:, 1]], axis=1).astype(np.float32)
+        tex_v_b64 = base64.b64encode(tvv.tobytes()).decode()
+        tex_f_b64 = base64.b64encode(td["faces"].astype(np.uint32).tobytes()).decode()
+        tex_uv_b64 = base64.b64encode(td["uv"].astype(np.float32).tobytes()).decode()
+        tex_img_b64 = b64_file(albedo_p)
+        print(f"[report] embedding textured mesh {len(tvv):,} verts + albedo", flush=True)
+
     scale = meta.get("scale_m_per_unit")
     unit_name = "ม." if scale else "หน่วยโมเดล"
 
@@ -144,6 +162,24 @@ def main():
     three_js = open(os.path.join(VENDOR, "three.min.js"), encoding="utf-8").read()
     orbit_js = open(os.path.join(VENDOR, "OrbitControls.js"), encoding="utf-8").read()
 
+    # textured-mesh JS built here (not nested inside the html f-string, which
+    # would be a triple-nested f-string — a SyntaxError on Python 3.11)
+    tex_js = ""
+    if tex_v_b64:
+        tex_js = (
+            f'const TV=dec("{tex_v_b64}",Float32Array), TF=dec("{tex_f_b64}",Uint32Array), '
+            f'TUV=dec("{tex_uv_b64}",Float32Array);\n'
+            "const tgeo=new THREE.BufferGeometry();\n"
+            "tgeo.setAttribute('position', new THREE.BufferAttribute(TV,3));\n"
+            "tgeo.setAttribute('uv', new THREE.BufferAttribute(TUV,2));\n"
+            "tgeo.setIndex(new THREE.BufferAttribute(TF,1)); tgeo.computeVertexNormals();\n"
+            "const texMap=new THREE.Texture(); texMap.flipY=false;\n"
+            "const timg=new Image(); timg.onload=()=>{texMap.image=timg; texMap.needsUpdate=true;};\n"
+            f'timg.src="data:image/png;base64,{tex_img_b64}";\n'
+            "texObj=new THREE.Mesh(tgeo, new THREE.MeshBasicMaterial({map:texMap, side:THREE.DoubleSide}));\n"
+            "texObj.visible=false; scene.add(texObj);"
+        )
+
     html = f"""<!DOCTYPE html>
 <html lang="th"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -169,7 +205,7 @@ def main():
 <main>
 {warn_html}
 <h2>โมเดล 3D (ลาก=หมุน · สองนิ้ว/ล้อ=ซูม)</h2>
-{'<div style="margin:6px 0"><button id="btnPts" class="tgl on">จุด</button> <button id="btnMesh" class="tgl">ผิวโมเดล</button></div>' if mesh_v_b64 else ''}
+{('<div style="margin:6px 0"><button id="btnPts" class="tgl">จุด</button> <button id="btnMesh" class="tgl">ผิวโมเดล</button>' + ('<button id="btnTex" class="tgl on">ผิว+ภาพจริง</button>' if tex_v_b64 else '') + '</div>') if mesh_v_b64 else ''}
 <div id="view"></div>
 {rooms_html}
 {furn_html}
@@ -207,10 +243,15 @@ const meshObj=new THREE.Mesh(mg, new THREE.MeshLambertMaterial({{vertexColors:tr
 meshObj.visible=false; scene.add(meshObj);
 scene.add(new THREE.AmbientLight(0xffffff, 0.75));
 const dl=new THREE.DirectionalLight(0xffffff, 0.5); dl.position.set(1,2,1); scene.add(dl);
-const bp=document.getElementById('btnPts'), bm=document.getElementById('btnMesh');
-function show(mesh){{meshObj.visible=mesh; ptsObj.visible=!mesh;
- bm.classList.toggle('on',mesh); bp.classList.toggle('on',!mesh);}}
-bp.onclick=()=>show(false); bm.onclick=()=>show(true); show(true);''' if mesh_v_b64 else ''}
+let texObj=null;
+{tex_js}
+const bp=document.getElementById('btnPts'), bm=document.getElementById('btnMesh'), bt=document.getElementById('btnTex');
+function show(mode){{
+ ptsObj.visible=(mode==='pts'); meshObj.visible=(mode==='mesh'); if(texObj)texObj.visible=(mode==='tex');
+ bp.classList.toggle('on',mode==='pts'); bm.classList.toggle('on',mode==='mesh');
+ if(bt)bt.classList.toggle('on',mode==='tex');}}
+bp.onclick=()=>show('pts'); bm.onclick=()=>show('mesh'); if(bt)bt.onclick=()=>show('tex');
+show(texObj?'tex':'mesh');''' if mesh_v_b64 else ''}
 const C=[{center[0]:.4f},{center[1]:.4f},{center[2]:.4f}], E={extent:.4f};
 cam.position.set(C[0]+E*0.45, C[1]+E*0.35, C[2]+E*0.45);
 const ctl=new THREE.OrbitControls(cam, ren.domElement);

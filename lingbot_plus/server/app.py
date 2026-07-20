@@ -132,7 +132,8 @@ def _worker():
 
             if job.get("output", "points") in ("mesh", "both"):
                 job["status"] = "mesh"
-                _run_stage(job, ["lingbot_plus.meshing", "--scan_dir", scan_dir])
+                # mesh mode is the "pretty" output -> also bake the UV texture (M2)
+                _run_stage(job, ["lingbot_plus.meshing", "--scan_dir", scan_dir, "--texture"])
 
             job["status"] = "floorplan"
             _run_stage(job, ["lingbot_plus.floorplan", "--scan_dir", scan_dir])

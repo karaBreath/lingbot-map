@@ -28,3 +28,6 @@ ultralytics
 fastapi
 uvicorn
 python-multipart
+
+# M2 UV texture baking (mesh UV unwrap; Open3D bakes the atlas)
+xatlas

@@ -79,6 +79,44 @@ def mesh_from_points(pts, cols, cam_centers, frame_idx,
     return verts, faces, vcols
 
 
+def texture_mesh(verts, faces, images, intrinsics, extrinsics,
+                 tex_size=1024, img_stride=4):
+    """M2 — bake a UV texture atlas from the posed keyframes.
+
+    xatlas unwraps the mesh into UV charts (robust to the open boundaries of a
+    cropped Poisson mesh, which Open3D's own compute_uvatlas rejects), then
+    Open3D project_images_to_albedo back-projects the images onto the atlas and
+    blends overlaps — image-resolution surface colour instead of per-vertex.
+
+    images (N,H,W,3) uint8 · intrinsics (N,3,3) · extrinsics (N,3,4) w2c.
+    Returns (vertices f32, faces u32, uv f32 per-vertex, albedo (T,T,3) u8).
+    """
+    import xatlas
+
+    vmap, idx, uvs = xatlas.parametrize(verts.astype(np.float32), faces.astype(np.uint32))
+    NV = verts[vmap].astype(np.float32)
+
+    import open3d as o3d
+    tm = o3d.t.geometry.TriangleMesh()
+    tm.vertex["positions"] = o3d.core.Tensor(NV, o3d.core.float32)
+    tm.triangle["indices"] = o3d.core.Tensor(idx.astype(np.int64), o3d.core.int64)
+    tm.triangle["texture_uvs"] = o3d.core.Tensor(uvs[idx].astype(np.float32), o3d.core.float32)
+
+    sel = range(0, len(images), img_stride)
+    imgs = [o3d.t.geometry.Image(o3d.core.Tensor(np.ascontiguousarray(images[i]))) for i in sel]
+    Ks = [o3d.core.Tensor(intrinsics[i].astype(np.float64)) for i in sel]
+    Es = [o3d.core.Tensor(np.vstack([extrinsics[i], [0, 0, 0, 1]]).astype(np.float64)) for i in sel]
+    alb = tm.project_images_to_albedo(imgs, Ks, Es, tex_size=tex_size, update_material=True)
+    albedo = alb.as_tensor().numpy().astype(np.uint8)
+
+    # fill small uncovered texels (occlusion/blend gaps show as black speckle)
+    import cv2
+    gap = (albedo.sum(2) == 0).astype(np.uint8)
+    if 0 < gap.mean() < 0.9:
+        albedo = cv2.inpaint(np.ascontiguousarray(albedo), gap, 3, cv2.INPAINT_TELEA)
+    return NV, idx.astype(np.uint32), uvs.astype(np.float32), albedo
+
+
 def decimate(verts, faces, vcols, target_tris):
     """Reduce triangle count for lightweight embedding (full-res GLB kept separately)."""
     import open3d as o3d
@@ -102,6 +140,10 @@ def main():
     ap.add_argument("--depth", type=int, default=9, help="Poisson octree depth (9=default, 10=finer)")
     ap.add_argument("--embed_tris", type=int, default=180_000,
                     help="triangle budget for report.html embed (GLB stays full-res)")
+    ap.add_argument("--texture", action="store_true",
+                    help="M2: bake a UV texture atlas from keyframes (image-res surface colour)")
+    ap.add_argument("--tex_size", type=int, default=1024)
+    ap.add_argument("--tex_img_stride", type=int, default=4, help="use every Nth keyframe when baking")
     args = ap.parse_args()
 
     sd = args.scan_dir
@@ -132,6 +174,28 @@ def main():
                         vertices=ev, faces=ef, colors=ec)
     print(f"[mesh] wrote {out_glb} ({os.path.getsize(out_glb)//1024//1024} MB, "
           f"{len(verts):,} verts, {len(faces):,} tris; embed {len(ef):,} tris)", flush=True)
+
+    if args.texture:
+        import cv2
+        images = (d["images"].transpose(0, 2, 3, 1) * 255).clip(0, 255).astype(np.uint8)
+        print(f"[mesh] texturing on the {len(ef):,}-tri mesh from "
+              f"{len(range(0, F, args.tex_img_stride))} keyframes...", flush=True)
+        tv, tf, tuv, albedo = texture_mesh(
+            ev, ef, images, d["intrinsic"], d["extrinsic"],
+            tex_size=args.tex_size, img_stride=args.tex_img_stride)
+        cv2.imwrite(os.path.join(sd, "albedo.png"),
+                    cv2.cvtColor(albedo, cv2.COLOR_RGB2BGR))
+        np.savez_compressed(os.path.join(sd, "mesh_tex.npz"),
+                            vertices=tv, faces=tf, uv=tuv)
+        # textured GLB (image baked in) for external viewers
+        import trimesh
+        from PIL import Image
+        vis = trimesh.visual.TextureVisuals(uv=tuv, image=Image.fromarray(albedo))
+        trimesh.Trimesh(vertices=tv, faces=tf, visual=vis, process=False).export(
+            os.path.join(sd, "mesh_textured.glb"))
+        cover = 100 * (albedo.reshape(-1, 3).sum(1) > 0).mean()
+        print(f"[mesh] wrote mesh_textured.glb + albedo.png ({args.tex_size}px, "
+              f"{cover:.0f}% covered)", flush=True)
 
 
 if __name__ == "__main__":
