@@ -19,3 +19,4 @@ scans/
 **/.DS_Store
 testdata/
 uploads/
+yolov8n.pt

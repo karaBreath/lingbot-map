@@ -50,10 +50,11 @@ PRESETS = {
     "balanced": {"fps": 5, "chunk_size": 120, "overlap": 10, "label": "สมดุล"},
     "quality":  {"fps": 8, "chunk_size": 120, "overlap": 12, "label": "ละเอียด"},
 }
-STAGES = ["extract", "reconstruct", "floorplan", "furniture", "report"]
+STAGES = ["extract", "reconstruct", "mesh", "floorplan", "furniture", "report"]
 STAGE_TH = {"extract": "แตกเฟรมวิดีโอ", "reconstruct": "สร้างโมเดล 3D",
-            "floorplan": "ทำแปลนห้อง", "furniture": "หาเฟอร์นิเจอร์",
+            "mesh": "ขึ้นผิวโมเดล", "floorplan": "ทำแปลนห้อง", "furniture": "หาเฟอร์นิเจอร์",
             "report": "รวมรายงาน", "done": "เสร็จ", "failed": "ล้มเหลว", "queued": "รอคิว"}
+OUTPUTS = ("points", "mesh", "both")   # Track M — 3D result mode
 
 app = FastAPI(title="LingBot-Map Plus")
 app.mount("/scans", StaticFiles(directory=SCANS_DIR, html=True), name="scans")
@@ -129,6 +130,10 @@ def _worker():
                              "--overlap", str(preset["overlap"]),
                              "--out_dir", scan_dir, "--backend", job["backend"]])
 
+            if job.get("output", "points") in ("mesh", "both"):
+                job["status"] = "mesh"
+                _run_stage(job, ["lingbot_plus.meshing", "--scan_dir", scan_dir])
+
             job["status"] = "floorplan"
             _run_stage(job, ["lingbot_plus.floorplan", "--scan_dir", scan_dir])
 
@@ -161,9 +166,12 @@ def index():
 
 @app.post("/api/scan")
 async def create_scan(video: UploadFile = File(...), name: str = Form(""),
-                      preset: str = Form("balanced"), backend: str = Form("")):
+                      preset: str = Form("balanced"), backend: str = Form(""),
+                      output: str = Form("points")):
     if preset not in PRESETS:
         raise HTTPException(400, f"preset ต้องเป็นหนึ่งใน {list(PRESETS)}")
+    if output not in OUTPUTS:
+        raise HTTPException(400, f"output ต้องเป็นหนึ่งใน {list(OUTPUTS)}")
     safe = re.sub(r"[^a-zA-Z0-9_-]", "", name) or time.strftime("scan-%Y%m%d-%H%M%S")
     if safe in _jobs and _jobs[safe]["status"] not in ("done", "failed"):
         raise HTTPException(409, f"งานชื่อ '{safe}' กำลังทำอยู่")
@@ -174,7 +182,7 @@ async def create_scan(video: UploadFile = File(...), name: str = Form(""),
         while chunk := await video.read(1 << 20):
             f.write(chunk)
     _jobs[safe] = {"name": safe, "status": "queued", "preset": preset,
-                   "backend": backend or BACKEND, "video": vid_path,
+                   "backend": backend or BACKEND, "output": output, "video": vid_path,
                    "created_at": time.time(), "log": [], "error": None, "report": None}
     _q.put(safe)
     return {"name": safe, "status": "queued"}

@@ -36,6 +36,12 @@
         <option value="balanced" selected>สมดุล</option>
         <option value="quality">ละเอียด (นานสุด)</option>
       </select></div>
+    <div><label>ผลลัพธ์ 3D</label><br>
+      <select id="output">
+        <option value="points" selected>จุดสี (เร็ว)</option>
+        <option value="mesh">ผิวโมเดล (สวยขึ้น +นาที)</option>
+        <option value="both">ทั้งคู่</option>
+      </select></div>
     <div><label>ตัวประมวลผล</label><br>
       <select id="backend"><option value="">อัตโนมัติ</option>
         <option value="directml">การ์ดจอ AMD (DirectML)</option>
@@ -65,6 +71,7 @@ go.onclick=async()=>{
   fd.append('name',document.getElementById('name').value);
   fd.append('preset',document.getElementById('preset').value);
   fd.append('backend',document.getElementById('backend').value);
+  fd.append('output',document.getElementById('output').value);
   try{
     const r=await fetch('/api/scan',{method:'POST',body:fd});
     const j=await r.json();

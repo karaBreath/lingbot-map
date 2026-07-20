@@ -78,6 +78,22 @@ def main():
     col_b64 = base64.b64encode(cols.tobytes()).decode()
     print(f"[report] embedding {len(pts):,} points ({len(pos_b64)//1024//1024} MB base64)", flush=True)
 
+    # ── mesh (Track M) — same orientation as points ──────────────────────────
+    mesh_v_b64 = mesh_f_b64 = mesh_c_b64 = ""
+    mesh_p = os.path.join(sd, "mesh_data.npz")
+    if os.path.exists(mesh_p):
+        md = np.load(mesh_p)
+        mv = md["vertices"].astype(np.float32)
+        if os.path.exists(os.path.join(sd, "plan_data.npz")):
+            pl = np.load(os.path.join(sd, "plan_data.npz"))
+            mv = mv @ pl["R"].T
+            mv[:, 2] -= float(pl["z0"])
+        mv = np.stack([mv[:, 0], mv[:, 2], -mv[:, 1]], axis=1).astype(np.float32)
+        mesh_v_b64 = base64.b64encode(mv.tobytes()).decode()
+        mesh_f_b64 = base64.b64encode(md["faces"].astype(np.uint32).tobytes()).decode()
+        mesh_c_b64 = base64.b64encode(md["colors"].astype(np.uint8).tobytes()).decode()
+        print(f"[report] embedding mesh {len(mv):,} verts", flush=True)
+
     scale = meta.get("scale_m_per_unit")
     unit_name = "ม." if scale else "หน่วยโมเดล"
 
@@ -145,12 +161,15 @@ def main():
  td,th{{border:1px solid #333;padding:6px 10px;text-align:left;font-size:.9rem}}
  th{{background:#222}} img{{max-width:100%;border-radius:10px}}
  .grade{{display:inline-block;background:#233;padding:2px 10px;border-radius:20px;font-size:.8rem;color:#9fd}}
+ .tgl{{background:#222;color:#9ab;border:1px solid #445;border-radius:8px;padding:6px 16px;cursor:pointer;font-size:.9rem}}
+ .tgl.on{{background:#2563eb;color:#fff;border-color:#2563eb}}
 </style></head><body>
 <header><h1>{title}</h1>
 <div class="mut">{date_str} · <span class="grade">estimate-grade ±5-10%</span></div></header>
 <main>
 {warn_html}
 <h2>โมเดล 3D (ลาก=หมุน · สองนิ้ว/ล้อ=ซูม)</h2>
+{'<div style="margin:6px 0"><button id="btnPts" class="tgl on">จุด</button> <button id="btnMesh" class="tgl">ผิวโมเดล</button></div>' if mesh_v_b64 else ''}
 <div id="view"></div>
 {rooms_html}
 {furn_html}
@@ -176,7 +195,22 @@ const g=new THREE.BufferGeometry();
 g.setAttribute('position', new THREE.BufferAttribute(pos,3));
 g.setAttribute('color', new THREE.BufferAttribute(col,3));
 const mat=new THREE.PointsMaterial({{size:{extent}*0.0022, vertexColors:true}});
-scene.add(new THREE.Points(g, mat));
+const ptsObj=new THREE.Points(g, mat); scene.add(ptsObj);
+{f'''const MV_B64="{mesh_v_b64}",MF_B64="{mesh_f_b64}",MC_B64="{mesh_c_b64}";
+const mvp=dec(MV_B64,Float32Array), mfi=dec(MF_B64,Uint32Array), mc8=dec(MC_B64,Uint8Array);
+const mcf=new Float32Array(mc8.length); for(let i=0;i<mc8.length;i++)mcf[i]=mc8[i]/255;
+const mg=new THREE.BufferGeometry();
+mg.setAttribute('position', new THREE.BufferAttribute(mvp,3));
+mg.setAttribute('color', new THREE.BufferAttribute(mcf,3));
+mg.setIndex(new THREE.BufferAttribute(mfi,1)); mg.computeVertexNormals();
+const meshObj=new THREE.Mesh(mg, new THREE.MeshLambertMaterial({{vertexColors:true, side:THREE.DoubleSide}}));
+meshObj.visible=false; scene.add(meshObj);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const dl=new THREE.DirectionalLight(0xffffff, 0.5); dl.position.set(1,2,1); scene.add(dl);
+const bp=document.getElementById('btnPts'), bm=document.getElementById('btnMesh');
+function show(mesh){{meshObj.visible=mesh; ptsObj.visible=!mesh;
+ bm.classList.toggle('on',mesh); bp.classList.toggle('on',!mesh);}}
+bp.onclick=()=>show(false); bm.onclick=()=>show(true); show(true);''' if mesh_v_b64 else ''}
 const C=[{center[0]:.4f},{center[1]:.4f},{center[2]:.4f}], E={extent:.4f};
 cam.position.set(C[0]+E*0.45, C[1]+E*0.35, C[2]+E*0.45);
 const ctl=new THREE.OrbitControls(cam, ren.domElement);
