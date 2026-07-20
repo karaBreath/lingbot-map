@@ -67,6 +67,8 @@ class MeasureViewer(PointCloudViewer):
                 meta = {}
         meta.update({
             "scale_m_per_unit": self.scale_m_per_unit,
+            "scale_source": "manual",          # overrides any prior auto estimate
+            "scale_confident": True,
             "calib_model_dist": float(model_dist),
             "calib_real_m": float(real_m),
             "calibrated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

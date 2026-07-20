@@ -201,6 +201,10 @@ def main():
     ap.add_argument("--wall_band", type=float, nargs=2, default=[0.3, 2.0],
                     help="height band (m) treated as wall evidence")
     ap.add_argument("--min_room_m2", type=float, default=1.5)
+    ap.add_argument("--assumed_cam_height", type=float, default=1.45,
+                    help="handheld camera height (m) for automatic metric scale")
+    ap.add_argument("--no_auto_scale", action="store_true",
+                    help="do not auto-estimate metric scale from camera height when uncalibrated")
     args = ap.parse_args()
 
     import open3d as o3d
@@ -229,11 +233,35 @@ def main():
     print(f"[floorplan] floor: {floor['inliers']:,} inliers, camera height ≈ "
           f"{floor['cam_h'] * unit:.2f} {unit_name}", flush=True)
     floor_warning = None
+    scale_source = "manual" if scale else None
     if scale and floor["cam_h"] * unit < 0.6:
         floor_warning = ("ระนาบอ้างอิงอยู่ห่างกล้องแค่ "
                          f"{floor['cam_h'] * unit:.2f} m — น่าจะเป็นผิวโต๊ะ ไม่ใช่พื้นจริง "
                          "(พื้นแท้โผล่ในภาพน้อย) ขนาด/พื้นที่อาจคลาดมากกว่าปกติ")
         print(f"[floorplan] ⚠ {floor_warning}", flush=True)
+
+    # automatic metric scale from camera height (when not manually calibrated)
+    if scale is None and not args.no_auto_scale:
+        from lingbot_plus.autoscale import auto_scale_from_camera
+        auto, note, conf = auto_scale_from_camera(
+            floor["cam_h"], extent, assumed_m=args.assumed_cam_height)
+        if auto:
+            scale, unit, unit_name = auto, auto, "m"
+            scale_source = "auto-camera-height"
+            floor_warning = note
+            print(f"[floorplan] auto-scale {scale:.4f} m/unit "
+                  f"(assumed cam height {args.assumed_cam_height} m, "
+                  f"{'confident' if conf else 'LOW confidence'})", flush=True)
+            meta_p = os.path.join(args.scan_dir, "meta.json")
+            meta = {}
+            if os.path.exists(meta_p):
+                with open(meta_p, encoding="utf-8") as f:
+                    meta = json.load(f)
+            meta.update({"scale_m_per_unit": scale, "scale_source": scale_source,
+                         "assumed_cam_height_m": args.assumed_cam_height,
+                         "scale_confident": bool(conf)})
+            with open(meta_p, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
 
     # rotate cloud: floor normal -> +Z, floor plane -> z=0
     R = rotation_to_z(floor["n"])
@@ -307,6 +335,8 @@ def main():
     title = f"แปลนมุมบน (estimate-grade ±5-10%) · ครอบคลุม {coverage*100:.0f}%"
     if not scale:
         title += " · ยังไม่ calibrate สเกล — หน่วยเป็นหน่วยโมเดล"
+    elif scale_source == "auto-camera-height":
+        title += " · สเกลประเมินอัตโนมัติ (เมตร ±20%)"
     ax.set_title(title, fontfamily="Tahoma")
     ax.set_xticks([]); ax.set_yticks([])
     for ext in ("png", "svg"):
@@ -326,8 +356,8 @@ def main():
     with open(os.path.join(args.scan_dir, "plan.json"), "w", encoding="utf-8") as f:
         json.dump({
             "rooms": [{k: v for k, v in r.items() if k != "mask_label"} for r in rooms],
-            "unit": unit_name, "scaled": bool(scale), "coverage": round(coverage, 3),
-            "grade": "estimate ±5-10%",
+            "unit": unit_name, "scaled": bool(scale), "scale_source": scale_source,
+            "coverage": round(coverage, 3), "grade": "estimate ±5-10%",
             "warning": floor_warning,
         }, f, ensure_ascii=False, indent=2)
     print(f"[floorplan] wrote plan.png / plan.svg / plan.json -> {args.scan_dir}", flush=True)
