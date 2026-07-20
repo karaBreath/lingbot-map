@@ -40,6 +40,26 @@ def umeyama(src: np.ndarray, dst: np.ndarray):
     return s, R, t
 
 
+def robust_umeyama(src, dst, trim=0.3, iters=3):
+    """Umeyama similarity with iterative outlier trimming.
+
+    Fit (s, R, t), drop the `trim` fraction of correspondences with the largest
+    residual, refit — `iters` times. Resists depth-disagreement outliers between
+    two chunks' overlap and the ill-conditioning of near-collinear inputs (the
+    dense caller feeds well-distributed points so scale is constrained in 3D).
+    """
+    s, R, t = umeyama(src, dst)
+    if trim <= 0 or len(src) < 8:
+        return s, R, t
+    for _ in range(iters):
+        res = np.linalg.norm(s * src @ R.T + t - dst, axis=1)
+        keep = res <= np.quantile(res, 1.0 - trim)
+        if keep.sum() < 8:
+            break
+        s, R, t = umeyama(src[keep], dst[keep])
+    return s, R, t
+
+
 def extr_to_centers_rots(extr: np.ndarray):
     """extr: [N,3,4] in the pipeline's stored convention (w2c, OpenCV cam-from-world
     — same thing demo.py saves and the viewer consumes). Returns camera centers
@@ -49,6 +69,38 @@ def extr_to_centers_rots(extr: np.ndarray):
     R_c2w = np.transpose(R_wc, (0, 2, 1))
     C = -np.einsum("nij,nj->ni", R_c2w, t_wc)
     return C, R_c2w
+
+
+def overlap_similarity(prev, cur, ov, unproject, conf_thr=3.0, max_pts=20000, seed=0):
+    """Similarity mapping cur (native frame) -> prev (already-global frame),
+    fit on DENSE corresponding overlap points instead of the ~ov camera centres.
+
+    The overlap frames are the same video frames in both chunks, so matching by
+    (frame, pixel) gives direct 3D correspondences. Camera centres over a
+    straight walk are near-collinear (scale ill-conditioned); dense well-spread
+    points fix that. Falls back to camera centres if the overlap is too sparse.
+    Returns (s, R, t, residual, method).
+    """
+    prev_pts = unproject(prev["depth"][-ov:], prev["extrinsic"][-ov:], prev["intrinsic"][-ov:])
+    cur_pts = unproject(cur["depth"][:ov], cur["extrinsic"][:ov], cur["intrinsic"][:ov])
+    dst = prev_pts.reshape(-1, 3)
+    src = cur_pts.reshape(-1, 3)
+    keep = (prev["depth_conf"][-ov:].reshape(-1) > conf_thr) & \
+           (cur["depth_conf"][:ov].reshape(-1) > conf_thr)
+    src, dst = src[keep], dst[keep]
+    if len(src) >= 200:
+        if len(src) > max_pts:
+            sel = np.random.default_rng(seed).choice(len(src), max_pts, replace=False)
+            src, dst = src[sel], dst[sel]
+        s, R, t = robust_umeyama(src, dst, trim=0.3, iters=3)
+        res = np.linalg.norm(s * src @ R.T + t - dst, axis=1)
+        keep2 = res <= np.quantile(res, 0.7)
+        return s, R, t, float(res[keep2].mean()), f"dense({keep2.sum()})"
+    # fallback: camera centres
+    sc, _ = extr_to_centers_rots(cur["extrinsic"][:ov])
+    dc, _ = extr_to_centers_rots(prev["extrinsic"][-ov:])
+    s, R, t = umeyama(sc, dc)
+    return s, R, t, float(np.linalg.norm(s * sc @ R.T + t - dc, axis=1).mean()), "cam-centre"
 
 
 def sim3_extr(extr: np.ndarray, s: float, Rg: np.ndarray, tg: np.ndarray):
@@ -140,13 +192,12 @@ def main():
         if prev is not None:
             ov = args.overlap
             # overlap frames: last `ov` of prev == first `ov` of this chunk.
-            # Fit the similarity on true camera centers (not raw t columns —
-            # stored extrinsics are w2c, whose t is NOT the camera position).
-            src, _ = extr_to_centers_rots(d["extrinsic"][:ov])
-            dst, _ = extr_to_centers_rots(prev["extrinsic"][-ov:])
-            s, R, t = umeyama(src, dst)
-            resid = np.linalg.norm(s * src @ R.T + t - dst, axis=1).mean()
-            print(f"[stitch] chunk {k}: scale={s:.4f} residual={resid:.4f}", flush=True)
+            # Fit on DENSE corresponding overlap points (camera centres over a
+            # straight walk are near-collinear -> scale ill-conditioned).
+            s, R, t, resid, method = overlap_similarity(
+                prev, d, ov, unproject_depth_map_to_point_map,
+                conf_thr=args.conf_threshold)
+            print(f"[stitch] chunk {k}: scale={s:.4f} residual={resid:.4f} [{method}]", flush=True)
             d["extrinsic"] = sim3_extr(d["extrinsic"], s, R, t)
             d["depth"] = d["depth"] * s  # metric content scales with the map
             # drop duplicated overlap frames from this chunk
