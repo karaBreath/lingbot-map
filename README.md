@@ -145,7 +145,7 @@ pip install -e ".[vis]"
 After installation, run your first scene with one command:
 
 ```bash
-python demo.py --model_path /path/to/lingbot-map-long.pt \
+python demo.py --model_path /path/to/lingbot-map.pt \
     --image_folder example/courthouse --mask_sky
 ```
 
@@ -157,10 +157,10 @@ Run `demo.py` for interactive 3D visualization via a browser-based [viser](https
 
 ### Try the Example Scenes
 
-We provide four example scenes in `example/` that you can run out of the box:
+We provide three example scenes in `example/` that you can run out of the box:
 ```bash
 # courthouse scene
-python demo.py --model_path /path/to/lingbot-map-long.pt \
+python demo.py --model_path /path/to/lingbot-map.pt \
     --image_folder example/courthouse --mask_sky
 ```
 
@@ -174,7 +174,7 @@ https://github.com/user-attachments/assets/aa10f7ab-8024-43c7-92f8-d56159ec85c8
 
 ```bash
 # University scene
-python demo.py --model_path /path/to/lingbot-map-long.pt \
+python demo.py --model_path /path/to/lingbot-map.pt \
     --image_folder example/university --mask_sky
 ```
 
@@ -189,26 +189,12 @@ https://github.com/user-attachments/assets/212a1744-6ff5-4ccf-9bd4-728608248b57
 
 ```bash
 # Loop scene (loop closure trajectory)
-python demo.py --model_path /path/to/lingbot-map-long.pt \
+python demo.py --model_path /path/to/lingbot-map.pt \
     --image_folder example/loop
 ```
 
 
 https://github.com/user-attachments/assets/5ae0a292-b081-40c6-838c-b7c1a0538d75
-
-
-
-
-
-```bash
-# Oxford scene with sky masking (outdoor, large scale scene)
-python demo.py --model_path /path/to/lingbot-map-long.pt \
-    --image_folder example/oxford --mask_sky
-```
-
-
-https://github.com/user-attachments/assets/6b8daa95-9ed4-40b2-9902-7435779b886d
-
 
 
 
@@ -221,28 +207,26 @@ https://github.com/user-attachments/assets/6b8daa95-9ed4-40b2-9902-7435779b886d
 
 We will provide more examples in the follow-up.
 
-### Streaming with Keyframe Interval
-
-Use `--keyframe_interval` to reduce KV cache memory by only keeping every N-th frame as a keyframe. Non-keyframe frames still produce predictions but are not stored in the cache. This is useful for long sequences which exceed 320 frames (We train with video RoPE on 320 views, so performance degrades when the KV cache stores more than 320 views. Using a keyframe strategy allows inference over longer sequences.).
-
+### Dynamic Demo (From Droid-W)
 
 **Dataset:** Download the demo sequences from [robbyant/lingbot-map-demo](https://huggingface.co/datasets/robbyant/lingbot-map-demo/tree/main) on Hugging Face.
 
-Example run on the `travel` sequence from the dataset above (sky masking on, 4 camera optimization iterations, keyframe every 2 frames):
+Example run on the `dynamic` sequence from the dataset above (sky masking on, 4 camera optimization iterations, keyframe every 2 frames):
+
+Run the `dynamic` sequence with sky masking, 4 camera optimization iterations, and an input stride of 2:
 
 ```bash
 python demo.py \
-    --image_folder /path/to/lingbot-map-demo/travel/ \
-    --model_path /path/to/lingbot-map-long.pt \
-    --mask_sky \
+    --image_folder /path/to/dynamic\
+    --model_path ../../Lingbot-Map/lingbot-map.pt \
     --camera_num_iterations 4 \
-    --keyframe_interval 2
+    --mask_sky \
+    --stride 2
 ```
 
+### Streaming with Keyframe Interval
 
-https://github.com/user-attachments/assets/d350b590-d036-4363-af8c-7af3918338ef
-
-
+Use `--keyframe_interval` to reduce KV cache memory by only keeping every N-th frame as a keyframe. Non-keyframe frames still produce predictions but are not stored in the cache. This is useful for long sequences which exceed 320 frames (We train with video RoPE on 320 views, so performance degrades when the KV cache stores more than 320 views. Using a keyframe strategy allows inference over longer sequences.).
 
 > **Note on inference range.** Our method does not perform state resetting by default, so the maximum inference range is bounded by the longest distance seen during training on the dataset. Beyond that distance, state resetting becomes necessary. If you observe pose collapse, switch to windowed mode (`--mode windowed`) — in most cases tuning `--keyframe_interval` alone is enough and the rest of the windowed parameters can stay at their defaults.
 
